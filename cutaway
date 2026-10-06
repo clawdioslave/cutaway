@@ -155,7 +155,10 @@ def cmd_narrate(a, rest):
 
 def cmd_stats(a, rest):
     import stats
-    stats.report(a.most, a.group)
+    if a.retention:
+        stats.retention(a.days, a.most, a.group)
+    else:
+        stats.report(a.most, a.group)
     return 0
 
 
@@ -253,6 +256,9 @@ def main():
     p.add_argument("--group", default="",
                    help="compare buckets, e.g. 'motion=Chapter (I|II|III|IV|V|VI) ,"
                         "kills=Chapter (VIII|IX|X)'")
+    p.add_argument("--retention", action="store_true",
+                   help="how far into each episode people get (needs the Analytics API)")
+    p.add_argument("--days", type=int, default=28, help="window for --retention")
     p.set_defaults(fn=cmd_stats)
 
     p = sub.add_parser("voice", help="read a script over a cut: counts you in, records, mixes")

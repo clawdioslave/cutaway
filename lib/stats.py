@@ -135,3 +135,74 @@ def report(most: int = 25, group: str = "") -> None:
 
     print("\nRetention needs the YouTube Analytics API (a separate API and scope). "
           "Without it, none of the above says whether anyone watched to the end.")
+
+
+ANALYTICS = "https://youtubeanalytics.googleapis.com/v2/reports"
+
+
+def retention(days: int = 28, most: int = 25, group: str = "") -> None:
+    """How far into each episode people actually get.
+
+    Views say what the algorithm did with a short. This says what a person did once it
+    reached them, which is the only half you control. averageViewPercentage is the number
+    to argue from: on a vertical under thirty seconds, anything under about half means the
+    opening is not earning the rest.
+    """
+    tok = youtube.access_token()
+    rows = details(tok, video_ids(tok, uploads_playlist(tok), most))
+    if not rows:
+        print("nothing published yet."); return
+    end = datetime.date.today()
+    start = end - datetime.timedelta(days=days)
+
+    got = []
+    for r in rows:
+        q = {"ids": "channel==MINE", "startDate": start.isoformat(), "endDate": end.isoformat(),
+             "metrics": "views,averageViewDuration,averageViewPercentage",
+             "filters": f"video=={r['id']}"}
+        resp = _requests().get(ANALYTICS, params=q,
+                               headers={"Authorization": f"Bearer {tok}"}, timeout=30)
+        if resp.status_code == 403:
+            sys.exit("the Analytics API refused this token — run `cutaway setup youtube` "
+                     "again to re-consent with the analytics scope added.")
+        if resp.status_code >= 300:
+            sys.exit(f"HTTP {resp.status_code} {resp.text[:300]}")
+        data = (resp.json().get("rows") or [[0, 0, 0]])[0]
+        got.append({**r, "a_views": int(data[0]), "secs": float(data[1]),
+                    "pct": float(data[2])})
+
+    if not any(r["a_views"] for r in got):
+        print(f"The Analytics API answered, and has nothing yet.\n")
+        print("YouTube takes a day or two to process analytics, so anything published\n"
+              "recently reports zero even when the Data API already shows views on it.\n"
+              "Run `cutaway stats` for live view counts; come back to this one tomorrow.")
+        return
+
+    print(f"last {days} days\n")
+    print(f"{'published':<11}{'views':>7}{'avg sec':>9}{'% seen':>8}  title")
+    print("─" * 78)
+    for r in sorted(got, key=lambda x: x["published"], reverse=True):
+        print(f"{r['published']:<11}{r['a_views']:>7}{r['secs']:>9.0f}{r['pct']:>7.0f}%"
+              f"  {r['title'][:38]}")
+
+    if group:
+        print()
+        buckets: dict = {}
+        for r in got:
+            key = "other"
+            for part in [g.strip() for g in group.split(",") if g.strip()]:
+                label, pattern = (part.split("=", 1) + [part])[:2]
+                if re.search(pattern, r["title"], re.I):
+                    key = label; break
+            buckets.setdefault(key, []).append(r)
+        print(f"{'group':<14}{'n':>4}{'views':>8}{'avg sec':>9}{'% seen':>8}")
+        print("─" * 44)
+        for key, rs in buckets.items():
+            seen = [r for r in rs if r["a_views"] > 0]
+            if not seen:
+                print(f"{key:<14}{len(rs):>4}{'—':>8}{'—':>9}{'no data':>8}"); continue
+            print(f"{key:<14}{len(rs):>4}{sum(r['a_views'] for r in seen):>8}"
+                  f"{sum(r['secs'] for r in seen) / len(seen):>9.0f}"
+                  f"{sum(r['pct'] for r in seen) / len(seen):>7.0f}%")
+        print("\nCompare the % seen column, not the views. Views measure the algorithm; "
+              "percent seen measures the edit.")
