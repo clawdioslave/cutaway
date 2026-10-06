@@ -153,6 +153,11 @@ def cmd_narrate(a, rest):
     return 0
 
 
+def cmd_tonight(a, rest):
+    import tonight
+    return tonight.run(a)
+
+
 def cmd_stats(a, rest):
     import stats
     if a.retention:
@@ -222,13 +227,17 @@ def main():
     p.add_argument("--hook", default="", help="big line across the top")
     p.add_argument("--sub", default="", help="smaller second line")
     p.add_argument("--tag", default=None, help="override the corner credit for this one")
-    p.add_argument("--story", default="", help="timed beats: 'line | line | 12-18:line | .'")
+    p.add_argument("--story", default="",
+                   help="timed beats: 'line | line | 12-18:line | .' — or 'auto' to use the names "
+                        "of what was fought, one per cut")
     p.add_argument("--story-y", type=float, default=0.155, help="where the beats sit, 0-1")
     p.add_argument("--crop", default="", help="x,y,w,h of the area to show")
     p.add_argument("--cam", default="", help="x,y,w,h of the webcam box")
     p.add_argument("--mute", action="store_true")
     p.add_argument("--no-moments", action="store_true",
                    help="ignore the moments log and score motion across the whole recording")
+    p.add_argument("--cold-open", action="store_true",
+                   help="put the heaviest moment first, then the rest in the order they happened")
     p.set_defaults(fn=cmd_build)
 
     p = sub.add_parser("upload", help="send a finished vertical to YouTube",
@@ -250,6 +259,20 @@ def main():
     p.add_argument("--private", action="store_true", help="release privately, to check before promoting")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(fn=cmd_shelf)
+
+    p = sub.add_parser("tonight", help="cut last night and shelf it — the whole thing in one line")
+    p.add_argument("--date", default="", help="YYYY-MM-DD; default is yesterday")
+    p.add_argument("--slug", default="", help="file name without .mp4; default is the date")
+    p.add_argument("--title", default="", help="YouTube title; default is the date")
+    p.add_argument("--desc", default="", help="description; default is ~/.config/cutaway/description.txt")
+    p.add_argument("--tags", default="")
+    p.add_argument("--story", default="auto", help="beats, or 'auto' for the names of what was fought")
+    p.add_argument("--seconds", type=float, default=28.0)
+    p.add_argument("--cut-len", type=float, default=3.2)
+    p.add_argument("--no-cold-open", action="store_true", help="strictly chronological instead")
+    p.add_argument("--publish", action="store_true", help="upload now instead of shelving")
+    p.add_argument("--private", action="store_true", help="with --publish: upload private")
+    p.set_defaults(fn=cmd_tonight)
 
     p = sub.add_parser("stats", help="what the channel actually did, per episode")
     p.add_argument("--most", type=int, default=25, help="how many recent uploads to read")

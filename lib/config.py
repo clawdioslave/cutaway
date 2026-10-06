@@ -43,6 +43,8 @@ DEFAULTS = {
     # Better than the moments log where you have it: weight decides which moments make the
     # episode, so a long fight beats arriving somewhere.
     "events_log": "",
+    # YouTube category for uploads. 20 is Gaming; 22 People & Blogs; 24 Entertainment.
+    "youtube_category": "20",
 }
 
 

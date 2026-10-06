@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob as _glob
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -31,8 +32,15 @@ FONT_CANDIDATES = [
 
 
 def need(binary: str) -> None:
-    if subprocess.run(["which", binary], capture_output=True).returncode != 0:
-        sys.exit(f"{binary} is not installed. On a Mac:  brew install ffmpeg")
+    """Make sure ffmpeg/ffprobe are reachable. Scheduled jobs run with a thin PATH, so the
+    Homebrew locations are added rather than failing on a machine that plainly has it."""
+    if subprocess.run(["which", binary], capture_output=True).returncode == 0:
+        return
+    for extra in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if pathlib.Path(extra, binary).exists():
+            os.environ["PATH"] = extra + os.pathsep + os.environ.get("PATH", "")
+            return
+    sys.exit(f"{binary} is not installed. On a Mac:  brew install ffmpeg")
 
 
 def font_path(preferred: str = "") -> str:
@@ -221,7 +229,7 @@ def peaks(path: pathlib.Path, seg: float, keep: int) -> list:
 
 def assemble(clips: list, total: float, seg: float, tmp: pathlib.Path,
              moments: dict | None = None, events: list | None = None,
-             labels: list | None = None) -> pathlib.Path:
+             labels: list | None = None, cold_open: bool = False) -> pathlib.Path:
     """Cut the night down to its moments and hard-cut them together, oldest first.
 
     With a moments log, each recording contributes the one cut around the thing that caused
@@ -253,7 +261,10 @@ def assemble(clips: list, total: float, seg: float, tmp: pathlib.Path,
     if scored:
         scored.sort(reverse=True, key=lambda r: (r[0], r[1]))
         chosen = scored[:want]
+        top = chosen[0]
         chosen.sort(key=lambda r: r[2].name)                 # then back into the order they happened
+        if cold_open and top in chosen:
+            chosen.remove(top); chosen.insert(0, top)        # the best thing first; the rest in order
         picks = [(c, st) for _w, _r, c, st, _l in chosen]
         labels.extend(l for _w, _r, _c, _s, l in chosen)
         anchored = len(picks)
@@ -295,17 +306,32 @@ def assemble(clips: list, total: float, seg: float, tmp: pathlib.Path,
     return base
 
 
-def night_clips(cfg: dict, day: str, most: int = 14) -> list:
-    """Every recording from one date. Comma-separate prefixes when a night spans two sessions."""
+def night_clips(cfg: dict, day: str, most: int = 14, events: list | None = None) -> list:
+    """Every recording from one date, narrowed to the ones worth cutting.
+
+    With an events log the candidates are the recordings that contain the heaviest events —
+    found from timestamps alone, no decoding. Without one the only cheap signal is file
+    size, which tracks camera motion, which tracks travel; it is kept as the fallback and
+    not pretended to be better than that."""
     d = pathlib.Path(cfg["clips_dir"]).expanduser()
     if not d.is_dir():
         sys.exit(f"clips_dir {d} does not exist — run: cutaway setup")
     found: list = []
     for part in [x.strip() for x in day.split(",") if x.strip()]:
         found += list(d.glob(cfg["night_glob"].replace("{date}", part)))
+    found = sorted(set(found))
     if not found:
         sys.exit(f"no recordings in {d} matching {cfg['night_glob'].replace('{date}', day)}")
-    return sorted(set(found), key=lambda q: -q.stat().st_size)[:most]
+    if events:
+        ranked = []
+        for c in found:
+            dur = probe(c)["dur"]
+            hit = event_in_clip(c, events, dur) if dur else None
+            ranked.append((hit[2] if hit else -1.0, c))
+        with_events = [c for w, c in sorted(ranked, key=lambda r: -r[0]) if w >= 0]
+        if with_events:
+            return with_events[:most]
+    return sorted(found, key=lambda q: -q.stat().st_size)[:most]
 
 
 def stills_clip(pattern: str, seconds: float, tmp: pathlib.Path) -> pathlib.Path:
@@ -472,11 +498,12 @@ def build(cfg: dict, a) -> pathlib.Path:
     auto, start, mute = a.auto, a.start, a.mute
 
     if a.night or a.cuts:
-        clips = night_clips(cfg, a.night) if a.night else [pathlib.Path(a.clip).expanduser()]
         off = getattr(a, "no_moments", False)
         moments = {} if off else load_moments(cfg)
         events = [] if off else load_events(cfg)
-        src = assemble(clips, a.seconds, a.cut_len, stage, moments, events, cut_labels)
+        clips = night_clips(cfg, a.night, events=events) if a.night else [pathlib.Path(a.clip).expanduser()]
+        src = assemble(clips, a.seconds, a.cut_len, stage, moments, events, cut_labels,
+                       cold_open=getattr(a, "cold_open", False))
         auto, start = False, 0.0
     elif a.stills:
         src = stills_clip(a.stills, a.seconds, stage)
@@ -519,7 +546,12 @@ def build(cfg: dict, a) -> pathlib.Path:
             last = "v2"
         chain.append(f"[{last}][1:v]overlay=0:0[v3]")
         last = "v3"
-        for n, (t0, t1, text) in enumerate(parse_story(a.story, dur) if a.story else []):
+        story = a.story
+        if story == "auto":
+            # the names of what was fought, lowercased, one per cut — a story nobody had to write
+            names = [l.lower() for l in cut_labels if l]
+            story = " | ".join(dict.fromkeys(names)) if names else ""
+        for n, (t0, t1, text) in enumerate(parse_story(story, dur) if story else []):
             bp = pathlib.Path(td) / f"beat{n}.png"
             make_beat(bp, text, fp, a.story_y)
             extra.append(str(bp))

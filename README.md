@@ -16,6 +16,16 @@ cutaway upload ch11.mp4 --title "Chapter XI" --desc "..."
 cutaway post --text "new one up" --video ch11.mp4
 ```
 
+Or, the whole thing in one line:
+
+```
+cutaway tonight
+```
+
+That cuts last night's recordings on what actually happened, writes a title, and puts the
+result on the shelf for the daily release to let out. Put it behind a timer and the channel
+feeds itself. `--publish` uploads straight away instead.
+
 Built for, and used nightly by, [The Chronicle of Cassidy](https://clawdioslave.github.io/the-chronicle/).
 
 ---
@@ -99,7 +109,11 @@ Words on top:
 - `--hook "..."` and `--sub "..."` — the title block at the top, held for the whole video.
 - `--story "a | b | 12-18:c | ."` — timed beats. Bars split them, they spread evenly across the
   length, `12-18:` pins one to those seconds, and a lone `.` is a deliberate silence.
+- `--story auto` — one beat per cut, the name of the thing that was fought, lowercased. A
+  story nobody had to write. Only works with an `events_log` that carries labels.
 - `--story-y 0.155` — where the beats sit vertically, 0 to 1.
+- `--cold-open` — the heaviest moment first, then the rest in the order they happened. The
+  first second decides whether a short gets a second; this spends your best one there.
 
 Beats are what turns a montage into something people finish. Three or four short lines that
 describe what's happening, in your own voice. If you can't write one, that's usually a sign
@@ -138,6 +152,11 @@ Weight is what decides which moments make the episode. Without it, all Cutaway c
 which moment had the most going on — which quietly favours arriving somewhere over fighting
 something, because travel moves the camera more. With it, the long fight wins the slot.
 
+With an events log, the *recordings themselves* are also chosen by it: the candidates for a
+night are the files that contain the heaviest events, found from timestamps alone before any
+decoding. Without one, the only cheap signal is file size — which tracks camera motion, which
+tracks travel — and it is kept as the fallback rather than pretended to be better than that.
+
 `--no-moments` turns all of this off and goes back to scoring motion, if you want to compare.
 
 ### `cutaway shelf`
@@ -167,6 +186,21 @@ whole mix lands at the loudness every platform targets anyway.
 
 This is also the honest answer to YouTube's reused-content rule. Silent gameplay is the
 thing that policy exists to catch; your voice over your own footage is what makes it yours.
+
+### `cutaway stats`
+
+```bash
+cutaway stats                                   # views, likes, comments per episode
+cutaway stats --retention                       # how far into each one people got
+cutaway stats --retention --group 'old=Chapter (I|II|III),new=Chapter (VIII|IX|X)'
+```
+
+Views measure what the algorithm did with a short. **Percent seen** measures what a person
+did once it reached them — and only the second one is yours to change by editing differently.
+`--group` buckets episodes so the question can be put directly: did cutting on real events
+hold people longer than cutting on motion? Anything under a day old prints `new` rather than
+a made-up rate. Retention needs the YouTube Analytics API enabled on your Cloud project and
+`cutaway setup youtube` run after adding the `yt-analytics.readonly` scope.
 
 ### `cutaway upload`
 

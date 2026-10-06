@@ -95,7 +95,14 @@ def _consent(store: dict) -> dict:
             pass
 
     srv = http.server.HTTPServer(("127.0.0.1", port), Handler)
-    threading.Thread(target=srv.handle_request, daemon=True).start()
+    srv.timeout = 1
+
+    def serve():
+        # a browser may hit the port for a favicon or a preflight before the real redirect;
+        # one handle_request() would swallow that and leave the actual code unanswered
+        while not ("code" in got or "error" in got):
+            srv.handle_request()
+    threading.Thread(target=serve, daemon=True).start()
 
     url = AUTH + "?" + urllib.parse.urlencode({
         "client_id": store["client_id"], "redirect_uri": redirect, "response_type": "code",
@@ -104,12 +111,14 @@ def _consent(store: dict) -> dict:
     print("If it does not open, paste this:\n\n  " + url + "\n")
     webbrowser.open(url)
     for _ in range(300):
-        if got:
+        if "code" in got or "error" in got:
             break
         threading.Event().wait(1)
     srv.server_close()
     if "code" not in got:
-        sys.exit("no authorisation came back — nothing was changed")
+        why = got.get("error", "no authorisation came back")
+        sys.exit(f"{why} — nothing was changed. If it says access_denied, check that the app's "
+                 f"scopes are registered under Data Access and you are listed as a test user.")
 
     r = requests.post(TOKEN, data={
         "code": got["code"], "client_id": store["client_id"], "client_secret": store["client_secret"],
@@ -152,7 +161,8 @@ def check() -> None:
 
 
 def upload(path: pathlib.Path, title: str, desc: str, tags: list, private: bool,
-           made_for_kids: bool = False) -> str:
+           made_for_kids: bool = False, category: str = "20") -> str:
+    """category 20 is Gaming — set "youtube_category" in config for anything else."""
     requests = _requests()
     if not path.exists():
         sys.exit(f"no such file: {path}")
@@ -160,7 +170,7 @@ def upload(path: pathlib.Path, title: str, desc: str, tags: list, private: bool,
         sys.exit(f"the title is {len(title)} characters; YouTube allows 100")
     tok = access_token()
     meta = {
-        "snippet": {"title": title, "description": desc, "tags": tags, "categoryId": "20"},
+        "snippet": {"title": title, "description": desc, "tags": tags, "categoryId": category},
         "status": {"privacyStatus": "private" if private else "public",
                    "selfDeclaredMadeForKids": made_for_kids},
     }
