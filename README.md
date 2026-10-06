@@ -187,6 +187,18 @@ whole mix lands at the loudness every platform targets anyway.
 This is also the honest answer to YouTube's reused-content rule. Silent gameplay is the
 thing that policy exists to catch; your voice over your own footage is what makes it yours.
 
+### `cutaway playlist`
+
+```bash
+cutaway playlist sync        # every "Chapter N" on the channel, into one playlist, in order
+```
+
+A series needs a shelf of its own on the channel — one place where the episodes sit in
+order and autoplay into each other. That is where someone who liked one becomes someone
+who watched six. Set `youtube_playlist` in the config and every `shelf release` files the
+new episode into it automatically; `sync` back-fills what is already published. Needs the
+full `youtube` scope registered under Data Access and one more `cutaway setup youtube`.
+
 ### `cutaway stats`
 
 ```bash

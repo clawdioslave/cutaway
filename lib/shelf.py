@@ -96,6 +96,17 @@ def release(private: bool = False, dry_run: bool = False) -> int:
     item["published"] = datetime.datetime.now().isoformat(timespec="seconds")
     item["url"] = f"https://youtube.com/watch?v={vid}"
     _write(items)
+    # a release is recorded before the playlist step, so a playlist hiccup never makes
+    # an already-published video look unreleased and get uploaded twice tomorrow
+    import config
+    pl = config.load().get("youtube_playlist", "")
+    if pl:
+        try:
+            tok = youtube.access_token()
+            youtube.add_to_playlist(tok, youtube.ensure_playlist(tok, pl), vid)
+            print(f"filed into “{pl}”")
+        except SystemExit as e:
+            print(f"(published, but not added to the playlist: {e})")
     left = sum(1 for i in items if not i.get("published"))
     print(f"{left} still waiting")
     return 0

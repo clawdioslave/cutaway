@@ -158,6 +158,23 @@ def cmd_tonight(a, rest):
     return tonight.run(a)
 
 
+def cmd_playlist(a, rest):
+    import youtube
+    cfg = config.load()
+    title = a.title or cfg.get("youtube_playlist", "")
+    if not title:
+        sys.exit("give --title, or set \"youtube_playlist\" in the config")
+    if a.action == "sync":
+        youtube.sync_playlist(title, a.desc)
+    elif a.action == "add":
+        if not a.video:
+            sys.exit("give the video id to add")
+        tok = youtube.access_token()
+        youtube.add_to_playlist(tok, youtube.ensure_playlist(tok, title), a.video)
+        print(f"added {a.video} to “{title}”")
+    return 0
+
+
 def cmd_stats(a, rest):
     import stats
     if a.retention:
@@ -273,6 +290,13 @@ def main():
     p.add_argument("--publish", action="store_true", help="upload now instead of shelving")
     p.add_argument("--private", action="store_true", help="with --publish: upload private")
     p.set_defaults(fn=cmd_tonight)
+
+    p = sub.add_parser("playlist", help="keep the series in one playlist, in chapter order")
+    p.add_argument("action", choices=["sync", "add"])
+    p.add_argument("video", nargs="?", help="for add: the video id")
+    p.add_argument("--title", default="", help="playlist name; default is youtube_playlist in config")
+    p.add_argument("--desc", default="")
+    p.set_defaults(fn=cmd_playlist)
 
     p = sub.add_parser("stats", help="what the channel actually did, per episode")
     p.add_argument("--most", type=int, default=25, help="how many recent uploads to read")

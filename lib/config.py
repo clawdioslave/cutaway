@@ -45,6 +45,9 @@ DEFAULTS = {
     "events_log": "",
     # YouTube category for uploads. 20 is Gaming; 22 People & Blogs; 24 Entertainment.
     "youtube_category": "20",
+    # A playlist every released episode is filed into, created if missing. Blank for none.
+    # This is where someone who liked one episode becomes someone who watched six.
+    "youtube_playlist": "",
 }
 
 

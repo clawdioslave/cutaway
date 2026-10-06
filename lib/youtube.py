@@ -32,7 +32,8 @@ import webbrowser
 
 HOME = pathlib.Path(os.environ.get("CUTAWAY_HOME", pathlib.Path.home() / ".config" / "cutaway"))
 CREDS = HOME / "youtube.json"
-SCOPE = ("https://www.googleapis.com/auth/youtube.upload"
+SCOPE = ("https://www.googleapis.com/auth/youtube"
+         " https://www.googleapis.com/auth/youtube.upload"
          " https://www.googleapis.com/auth/youtube.readonly"
          " https://www.googleapis.com/auth/yt-analytics.readonly")
 AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -233,7 +234,128 @@ def setup(from_file: str = "") -> None:
         sec = input("Client secret:   ").strip()
         if not cid or not sec:
             sys.exit("both values are needed — nothing was saved")
-    _save({"client_id": cid, "client_secret": sec})
+    # Keep a working refresh token until the new consent actually succeeds. Re-running
+    # setup to add a scope must not be able to break the nightly release by timing out.
+    prior = json.loads(CREDS.read_text()) if CREDS.exists() else {}
+    store = {"client_id": cid, "client_secret": sec}
+    if prior.get("client_id") == cid and prior.get("refresh_token"):
+        store["refresh_token"] = prior["refresh_token"]
+    _save(store)
     print(f"stored → {CREDS}")
-    _consent(_store())
+    fresh = dict(store); fresh.pop("refresh_token", None)
+    _consent(fresh)          # on success this writes the new token; on failure the old one stands
     check()
+
+
+# ── playlists ────────────────────────────────────────────────────────────────────────────────
+# A series needs a shelf of its own on the channel: one place where the episodes sit in order
+# and autoplay into each other. That is where a viewer who liked one becomes a viewer who
+# watched six. Needs the full `youtube` scope.
+
+def _hdr(tok: str) -> dict:
+    return {"Authorization": f"Bearer {tok}"}
+
+
+def my_playlists(tok: str) -> list:
+    """All the channel's playlists as [(id, title), ...]."""
+    requests = _requests()
+    out, page = [], None
+    while True:
+        p = {"part": "snippet", "mine": "true", "maxResults": 50}
+        if page:
+            p["pageToken"] = page
+        r = requests.get(f"{API}/playlists", params=p, headers=_hdr(tok), timeout=30)
+        if r.status_code == 403:
+            sys.exit("the playlist call was refused — run `cutaway setup youtube` again to "
+                     "re-consent with the full youtube scope added.")
+        if r.status_code >= 300:
+            sys.exit(f"HTTP {r.status_code} {r.text[:300]}")
+        d = r.json()
+        out += [(i["id"], i["snippet"]["title"]) for i in d.get("items", [])]
+        page = d.get("nextPageToken")
+        if not page:
+            return out
+
+
+def ensure_playlist(tok: str, title: str, desc: str = "") -> str:
+    """The playlist's id, creating it public if it is not there yet."""
+    for pid, t in my_playlists(tok):
+        if t.strip().lower() == title.strip().lower():
+            return pid
+    requests = _requests()
+    r = requests.post(f"{API}/playlists", params={"part": "snippet,status"}, headers=_hdr(tok),
+                      json={"snippet": {"title": title, "description": desc},
+                            "status": {"privacyStatus": "public"}}, timeout=30)
+    if r.status_code >= 300:
+        sys.exit(f"could not create the playlist: HTTP {r.status_code} {r.text[:300]}")
+    print(f"created playlist “{title}”")
+    return r.json()["id"]
+
+
+def playlist_videos(tok: str, pid: str) -> list:
+    """Video ids already in the playlist, in order."""
+    requests = _requests()
+    out, page = [], None
+    while True:
+        p = {"part": "contentDetails", "playlistId": pid, "maxResults": 50}
+        if page:
+            p["pageToken"] = page
+        r = requests.get(f"{API}/playlistItems", params=p, headers=_hdr(tok), timeout=30)
+        if r.status_code >= 300:
+            sys.exit(f"HTTP {r.status_code} {r.text[:300]}")
+        d = r.json()
+        out += [i["contentDetails"]["videoId"] for i in d.get("items", [])]
+        page = d.get("nextPageToken")
+        if not page:
+            return out
+
+
+def add_to_playlist(tok: str, pid: str, video_id: str, position=None) -> None:
+    requests = _requests()
+    body = {"snippet": {"playlistId": pid,
+                        "resourceId": {"kind": "youtube#video", "videoId": video_id}}}
+    if position is not None:
+        body["snippet"]["position"] = position
+    r = requests.post(f"{API}/playlistItems", params={"part": "snippet"}, headers=_hdr(tok),
+                      json=body, timeout=30)
+    if r.status_code >= 300:
+        sys.exit(f"could not add {video_id}: HTTP {r.status_code} {r.text[:300]}")
+
+
+_ROMAN = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
+
+
+def chapter_number(title: str):
+    """The N in 'Chapter N — …', read as a roman numeral, or None."""
+    import re
+    m = re.search(r"\bChapter\s+([IVXLC]+)\b", title)
+    if not m:
+        return None
+    s, total = m.group(1), 0
+    for i, ch in enumerate(s):
+        val = _ROMAN[ch]
+        if i + 1 < len(s) and val < _ROMAN[s[i + 1]]:
+            total -= val
+        else:
+            total += val
+    return total
+
+
+def sync_playlist(title: str, desc: str = "") -> None:
+    """Put every chapter on the channel into the playlist, in chapter order, once."""
+    import stats
+    tok = access_token()
+    pid = ensure_playlist(tok, title, desc)
+    have = set(playlist_videos(tok, pid))
+    rows = stats.details(tok, stats.video_ids(tok, stats.uploads_playlist(tok), 200))
+    chapters = [(chapter_number(r["title"]), r) for r in rows]
+    chapters = sorted([(n, r) for n, r in chapters if n is not None], key=lambda x: x[0])
+    added = 0
+    for n, r in chapters:
+        if r["id"] in have:
+            continue
+        add_to_playlist(tok, pid, r["id"])
+        print(f"  + Chapter {n}: {r['title'][:50]}")
+        added += 1
+    print(f"{len(chapters)} chapters on the channel, {added} added, playlist has "
+          f"{len(have) + added}: https://youtube.com/playlist?list={pid}")
