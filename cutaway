@@ -153,6 +153,12 @@ def cmd_narrate(a, rest):
     return 0
 
 
+def cmd_stats(a, rest):
+    import stats
+    stats.report(a.most, a.group)
+    return 0
+
+
 def cmd_voice(a, rest):
     import voice
     if a.devices:
@@ -241,6 +247,13 @@ def main():
     p.add_argument("--private", action="store_true", help="release privately, to check before promoting")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(fn=cmd_shelf)
+
+    p = sub.add_parser("stats", help="what the channel actually did, per episode")
+    p.add_argument("--most", type=int, default=25, help="how many recent uploads to read")
+    p.add_argument("--group", default="",
+                   help="compare buckets, e.g. 'motion=Chapter (I|II|III|IV|V|VI) ,"
+                        "kills=Chapter (VIII|IX|X)'")
+    p.set_defaults(fn=cmd_stats)
 
     p = sub.add_parser("voice", help="read a script over a cut: counts you in, records, mixes")
     p.add_argument("video", nargs="?")
