@@ -33,6 +33,16 @@ DEFAULTS = {
     "cam": "",
     # the hairline under the gameplay strip, as r,g,b
     "rule": "214,174,88",
+    # A JSONL log of the moments that triggered each recording — one object per line with
+    # a "t" unix timestamp and a "clip" path. If your recorder saves a replay buffer when
+    # something happens, this is the difference between highlights and footage: the cut
+    # lands on the moment instead of wherever the camera happened to swing. Blank falls
+    # back to scoring motion across the whole recording.
+    "moments_log": "",
+    # A JSONL of weighted events — {"t": unix, "label": "Ghostpaw Alpha", "weight": 42}.
+    # Better than the moments log where you have it: weight decides which moments make the
+    # episode, so a long fight beats arriving somewhere.
+    "events_log": "",
 }
 
 

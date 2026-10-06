@@ -133,6 +133,33 @@ def cmd_upload(a, rest):
     return 0
 
 
+def cmd_shelf(a, rest):
+    import shelf
+    if a.action == "add":
+        shelf.add(pathlib.Path(a.file).expanduser(), a.title, a.desc, a.tags)
+    elif a.action in ("list", "ls"):
+        shelf.show()
+    elif a.action == "release":
+        return shelf.release(a.private, a.dry_run)
+    elif a.action == "drop":
+        shelf.drop(int(a.file))
+    return 0
+
+
+def cmd_narrate(a, rest):
+    import narrate
+    narrate.mix(pathlib.Path(a.video).expanduser(), pathlib.Path(a.voice).expanduser(),
+                pathlib.Path(a.out).expanduser(), a.game, a.delay, a.duck)
+    return 0
+
+
+def cmd_script(a, rest):
+    import narrate
+    text = pathlib.Path(a.file).expanduser().read_text() if a.file else sys.stdin.read()
+    narrate.script(text, a.seconds, a.wpm)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="cutaway", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -169,6 +196,8 @@ def main():
     p.add_argument("--crop", default="", help="x,y,w,h of the area to show")
     p.add_argument("--cam", default="", help="x,y,w,h of the webcam box")
     p.add_argument("--mute", action="store_true")
+    p.add_argument("--no-moments", action="store_true",
+                   help="ignore the moments log and score motion across the whole recording")
     p.set_defaults(fn=cmd_build)
 
     p = sub.add_parser("upload", help="send a finished vertical to YouTube",
@@ -180,6 +209,31 @@ def main():
     p.add_argument("--private", action="store_true", help="upload private instead of public")
     p.add_argument("--check", action="store_true", help="just confirm the connection")
     p.set_defaults(fn=cmd_upload)
+
+    p = sub.add_parser("shelf", help="hold finished videos and let one out a day")
+    p.add_argument("action", choices=["add", "list", "ls", "release", "drop"])
+    p.add_argument("file", nargs="?", help="the video to add, or the number to drop")
+    p.add_argument("--title", default="")
+    p.add_argument("--desc", default="")
+    p.add_argument("--tags", default="")
+    p.add_argument("--private", action="store_true", help="release privately, to check before promoting")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(fn=cmd_shelf)
+
+    p = sub.add_parser("narrate", help="put your voice over a cut and duck the game under it")
+    p.add_argument("video")
+    p.add_argument("voice")
+    p.add_argument("-o", "--out", required=True)
+    p.add_argument("--game", type=float, default=0.35, help="game level before ducking, 0-1")
+    p.add_argument("--delay", type=float, default=0.0, help="shift the voice later by this many seconds")
+    p.add_argument("--duck", type=float, default=8.0, help="how hard the game drops while you talk")
+    p.set_defaults(fn=cmd_narrate)
+
+    p = sub.add_parser("script", help="trim writing to what fits in the time you have")
+    p.add_argument("file", nargs="?", help="a text file, or leave it off to read stdin")
+    p.add_argument("--seconds", type=float, default=28.0)
+    p.add_argument("--wpm", type=int, default=150)
+    p.set_defaults(fn=cmd_script)
 
     p = sub.add_parser("post", help="post to X (run `cutaway post -h` for its options)",
                        add_help=False)

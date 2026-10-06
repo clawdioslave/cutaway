@@ -105,6 +105,69 @@ Beats are what turns a montage into something people finish. Three or four short
 describe what's happening, in your own voice. If you can't write one, that's usually a sign
 the night wasn't a story and the cut will feel like filler.
 
+### Cutting on real events, not motion
+
+This is the part that matters most, and it is worth explaining why.
+
+Scoring motion across a recording sounds right and is quietly wrong. Scene-change score
+peaks when the **camera** moves — running through trees, swinging the view around — and a
+fight is often a fairly still camera with effects over it. Measured against a log of what
+actually happened, a pure motion picker missed the real moment by **12 to 37 seconds on
+four clips out of four**. It reliably found the walk *toward* the thing.
+
+If your recorder saves a replay buffer when something happens, the fix is free, because the
+moment is already recorded — near the *end* of each file, since the buffer is written after
+the fact. Point Cutaway at a log of it:
+
+```jsonc
+// moments_log — one object per line
+{"t": 1791247947.89, "clip": "/Users/you/Movies/Replay_2026-10-05_20-52-34.mp4"}
+```
+
+Each recording then contributes one cut, guaranteed to contain the moment with a beat
+either side. Motion only chooses *where* inside that window.
+
+Better still, if you can say how much each thing was worth:
+
+```jsonc
+// events_log — matched to recordings by time, no clip path needed
+{"t": 1791247947.89, "label": "Dark Strand Fanatic", "weight": 151.6}
+```
+
+Weight is what decides which moments make the episode. Without it, all Cutaway can ask is
+which moment had the most going on — which quietly favours arriving somewhere over fighting
+something, because travel moves the camera more. With it, the long fight wins the slot.
+
+`--no-moments` turns all of this off and goes back to scoring motion, if you want to compare.
+
+### `cutaway shelf`
+
+Building and publishing should not be the same act. Ten episodes released in an afternoon
+is a dump: nothing can learn from it, nobody can follow it, and the tenth buries the first.
+
+```bash
+cutaway shelf add tonight.mp4 --title "Chapter XI" --desc "$(cat desc.txt)"
+cutaway shelf list
+cutaway shelf release          # publishes the oldest one still waiting
+```
+
+Cut whenever you have footage; put `cutaway shelf release` behind a daily timer and the
+backlog meters itself out. Run it on an empty shelf and it does nothing, quietly.
+
+### `cutaway narrate`
+
+```bash
+cutaway script chapter.txt --seconds 28      # trim your writing to what actually fits
+cutaway narrate cut.mp4 voice.m4a -o episode.mp4
+```
+
+Levels and compresses your voice, then ducks the game underneath it with a sidechain — down
+while you talk, back up in the gaps — rather than flattening it to a constant murmur. The
+whole mix lands at the loudness every platform targets anyway.
+
+This is also the honest answer to YouTube's reused-content rule. Silent gameplay is the
+thing that policy exists to catch; your voice over your own footage is what makes it yours.
+
 ### `cutaway upload`
 
 ```bash

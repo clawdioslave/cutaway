@@ -96,6 +96,109 @@ def busiest(prof: dict, total: float, win: float) -> float:
     return best_s
 
 
+def load_moments(cfg: dict) -> dict:
+    """The log of what triggered each recording, keyed by clip path.
+
+    A replay buffer is saved *after* the thing happens, so the moment is near the end of
+    the file, not in the middle. Scoring motion across the whole recording reliably finds
+    the run-up instead: the camera swings hardest while you are travelling, and a fight is
+    often a fairly still camera with effects over it. This is the ground truth that fixes it.
+    """
+    p = cfg.get("moments_log", "")
+    if not p:
+        return {}
+    f = pathlib.Path(p).expanduser()
+    if not f.exists():
+        return {}
+    out = {}
+    for line in f.read_text().splitlines():
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get("clip") and d.get("t"):
+            out[str(d["clip"])] = float(d["t"])
+    return out
+
+
+def load_events(cfg: dict) -> list:
+    """A weighted log of things that happened, as [(unix_time, label, weight), ...].
+
+    Richer than the moments log: a moment only says "something happened here", while an
+    event says what and how much it was worth. That matters because the things a recorder
+    saves are not equally interesting — arriving in a new zone and a two-minute fight with
+    an elite both trip the shutter, and only one of them is worth thirty seconds of
+    somebody's attention. Weight is what decides which cuts make the episode.
+    """
+    p = cfg.get("events_log", "")
+    if not p:
+        return []
+    f = pathlib.Path(p).expanduser()
+    if not f.exists():
+        return []
+    out = []
+    for line in f.read_text().splitlines():
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get("t"):
+            out.append((float(d["t"]), str(d.get("label") or ""), float(d.get("weight") or 1.0)))
+    return sorted(out)
+
+
+def clip_span(path: pathlib.Path, dur: float) -> tuple:
+    """The wall-clock window a recording covers. A replay buffer ends when it is written."""
+    end = path.stat().st_mtime
+    return end - dur, end
+
+
+def event_in_clip(path: pathlib.Path, events: list, dur: float):
+    """The best logged event inside this recording: (seconds_in, label, weight)."""
+    lo, hi = clip_span(path, dur)
+    best = None
+    for t, label, weight in events:
+        if lo <= t <= hi:
+            if best is None or weight > best[2]:
+                best = (t - lo, label, weight)
+    return best
+
+
+def event_time(path: pathlib.Path, moments: dict, dur: float):
+    """Seconds from the start of the recording to the thing that caused it to be saved."""
+    t = moments.get(str(path))
+    if not t:
+        return None
+    ev = t - (path.stat().st_mtime - dur)
+    return ev if 0.0 <= ev <= dur else None
+
+
+def anchored_cut(path: pathlib.Path, seg: float, ev: float, dur: float, slack: float = 2.5):
+    """The best `seg` seconds around a known moment.
+
+    The moment itself is always inside the cut — that is the entire point, and motion alone
+    will not keep it there. Travel scores higher than fighting, so an unconstrained search
+    slides into the run-up every time. The window here only spans starts that leave the
+    event on screen with a beat either side; motion picks the liveliest of those.
+    """
+    lo = max(0.0, ev - seg + 0.3)                      # event no later than 0.3s before the end
+    hi = min(max(0.0, dur - seg), max(0.0, ev - 0.5))  # and no sooner than 0.5s after the start
+    if hi < lo:
+        lo = hi = max(0.0, min(dur - seg, ev - seg / 2))
+    prof = motion_profile(path, lo, (hi - lo) + seg)
+    best, best_st = None, lo
+    st = lo
+    while st <= hi + 0.01:
+        rel = st - lo
+        score = sum(prof.get(k, 0.0) for k in range(int(rel), int(rel + seg) + 1))
+        if best is None or score > best:
+            best, best_st = score, st
+        st += 0.5
+    if brightness(path, best_st + seg / 2) < 20:
+        return None
+    return best_st, (best or 0.0)
+
+
 def peaks(path: pathlib.Path, seg: float, keep: int) -> list:
     """The best `keep` moments in one recording: most motion, non-overlapping, bright enough to see."""
     info = probe(path)
@@ -116,18 +219,63 @@ def peaks(path: pathlib.Path, seg: float, keep: int) -> list:
     return sorted(chosen)
 
 
-def assemble(clips: list, total: float, seg: float, tmp: pathlib.Path) -> pathlib.Path:
-    """Cut the night down to its moments and hard-cut them together, oldest first."""
+def assemble(clips: list, total: float, seg: float, tmp: pathlib.Path,
+             moments: dict | None = None, events: list | None = None,
+             labels: list | None = None) -> pathlib.Path:
+    """Cut the night down to its moments and hard-cut them together, oldest first.
+
+    With a moments log, each recording contributes the one cut around the thing that caused
+    it to be saved, and the recordings with the most going on at that instant win the slots.
+    Without one, this falls back to scoring motion across each whole recording.
+    """
     want = max(2, int(round(total / seg)))
-    per_clip = max(1, want // max(1, len(clips)) + 1)
-    picks = []
+    moments = moments or {}
+    labels = labels if labels is not None else []
+    picks, anchored, weighted = [], 0, 0
+
+    scored = []
     for c in clips:
-        for st in peaks(c, seg, per_clip):
-            picks.append((c, st))
-    picks.sort(key=lambda x: (x[0].name, x[1]))
-    picks = picks[:want]
+        dur = probe(c)["dur"]
+        hit = event_in_clip(c, events or [], dur)            # a weighted event beats a bare moment
+        if hit:
+            ev, label, weight = hit
+        else:
+            ev, label, weight = event_time(c, moments, dur), "", None
+        if ev is None:
+            continue
+        got = anchored_cut(c, seg, ev, dur)
+        if not got:
+            continue
+        # With weights, the log decides what is worth showing. Without them, all we can ask
+        # is which moment had the most going on, which quietly favours travel over fighting.
+        rank = weight if weight is not None else got[1]
+        scored.append((weight is not None, rank, c, got[0], label))
+    if scored:
+        scored.sort(reverse=True, key=lambda r: (r[0], r[1]))
+        chosen = scored[:want]
+        chosen.sort(key=lambda r: r[2].name)                 # then back into the order they happened
+        picks = [(c, st) for _w, _r, c, st, _l in chosen]
+        labels.extend(l for _w, _r, _c, _s, l in chosen)
+        anchored = len(picks)
+        weighted = sum(1 for r in chosen if r[0])
+
+    if len(picks) < want:                                    # top up from recordings with no moment logged
+        used = {c for c, _ in picks}
+        spare = [c for c in clips if c not in used]
+        per_clip = max(1, (want - len(picks)) // max(1, len(spare)) + 1) if spare else 0
+        extra = []
+        for c in spare:
+            for st in peaks(c, seg, per_clip):
+                extra.append((c, st))
+        extra.sort(key=lambda x: (x[0].name, x[1]))
+        picks += extra[: want - len(picks)]
+        picks.sort(key=lambda x: (x[0].name, x[1]))
+
     if not picks:
         sys.exit("no usable moments found — the recordings may be too short or too dark")
+    if anchored:
+        detail = f", {weighted} of them to a weighted event" if weighted else ""
+        print(f"  {anchored} of {len(picks)} cuts anchored to a logged moment{detail}")
     parts = []
     for i, (clip, st) in enumerate(picks):
         out = tmp / f"cut{i:02d}.mp4"
@@ -147,7 +295,7 @@ def assemble(clips: list, total: float, seg: float, tmp: pathlib.Path) -> pathli
     return base
 
 
-def night_clips(cfg: dict, day: str, most: int = 5) -> list:
+def night_clips(cfg: dict, day: str, most: int = 14) -> list:
     """Every recording from one date. Comma-separate prefixes when a night spans two sessions."""
     d = pathlib.Path(cfg["clips_dir"]).expanduser()
     if not d.is_dir():
@@ -320,11 +468,15 @@ def build(cfg: dict, a) -> pathlib.Path:
 
     holder = tempfile.TemporaryDirectory()
     stage = pathlib.Path(holder.name)
+    cut_labels: list = []
     auto, start, mute = a.auto, a.start, a.mute
 
     if a.night or a.cuts:
         clips = night_clips(cfg, a.night) if a.night else [pathlib.Path(a.clip).expanduser()]
-        src = assemble(clips, a.seconds, a.cut_len, stage)
+        off = getattr(a, "no_moments", False)
+        moments = {} if off else load_moments(cfg)
+        events = [] if off else load_events(cfg)
+        src = assemble(clips, a.seconds, a.cut_len, stage, moments, events, cut_labels)
         auto, start = False, 0.0
     elif a.stills:
         src = stills_clip(a.stills, a.seconds, stage)
