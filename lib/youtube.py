@@ -195,12 +195,32 @@ def upload(path: pathlib.Path, title: str, desc: str, tags: list, private: bool,
     sys.exit("\nupload ended without YouTube returning a video id")
 
 
-def setup() -> None:
-    print(__doc__.split("One-time setup")[1].strip() if "One-time setup" in __doc__ else "")
-    cid = input("\nOAuth client ID: ").strip()
-    sec = input("Client secret:   ").strip()
-    if not cid or not sec:
-        sys.exit("both values are needed — nothing was saved")
+def setup(from_file: str = "") -> None:
+    """Store the client ID and secret, then do the one browser round trip.
+
+    `--from` takes the JSON Google hands you when you create the client, so the secret goes
+    from the download straight into the locked config without being read aloud, pasted into
+    a terminal, or passing through anybody's scrollback.
+    """
+    if from_file:
+        p = pathlib.Path(from_file).expanduser()
+        if not p.exists():
+            sys.exit(f"no such file: {p}")
+        try:
+            blob = json.loads(p.read_text())
+        except json.JSONDecodeError:
+            sys.exit(f"{p} is not JSON — download it again from the OAuth client dialog")
+        inner = blob.get("installed") or blob.get("web") or blob
+        cid, sec = inner.get("client_id", ""), inner.get("client_secret", "")
+        if not cid or not sec:
+            sys.exit(f"{p} has no client_id/client_secret — is it the right download?")
+        print(f"read the client from {p.name} (…{cid[-18:]})")
+    else:
+        print(__doc__.split("One-time setup")[1].strip() if "One-time setup" in __doc__ else "")
+        cid = input("\nOAuth client ID: ").strip()
+        sec = input("Client secret:   ").strip()
+        if not cid or not sec:
+            sys.exit("both values are needed — nothing was saved")
     _save({"client_id": cid, "client_secret": sec})
     print(f"stored → {CREDS}")
     _consent(_store())

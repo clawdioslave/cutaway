@@ -29,7 +29,7 @@ def cmd_setup(a, rest):
         return subprocess.call([str(HERE / "setup-x.sh")])
     if a.what == "youtube":
         import youtube
-        return youtube.setup()
+        return youtube.setup(a.from_json)
 
     cfg = config.load()
     print("Cutaway setup. Press Enter to keep what is in brackets.\n")
@@ -167,6 +167,8 @@ def main():
 
     p = sub.add_parser("setup", help="write the config, or connect X or YouTube")
     p.add_argument("what", nargs="?", choices=["x", "youtube"])
+    p.add_argument("--from", dest="from_json", default="",
+                   help="for youtube: the client JSON Google gives you, so no secret is pasted")
     p.set_defaults(fn=cmd_setup)
 
     p = sub.add_parser("doctor", help="check that everything it needs is present")
