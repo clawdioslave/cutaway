@@ -301,6 +301,17 @@ def playlist_videos(tok: str, pid: str) -> list:
         if page:
             p["pageToken"] = page
         r = requests.get(f"{API}/playlistItems", params=p, headers=_hdr(tok), timeout=30)
+        if r.status_code == 404:
+            # a playlist created seconds ago is not always readable yet; wait, then treat
+            # a persistent 404 as empty rather than failing a sync that just created it
+            import time
+            for _ in range(4):
+                time.sleep(3)
+                r = requests.get(f"{API}/playlistItems", params=p, headers=_hdr(tok), timeout=30)
+                if r.status_code != 404:
+                    break
+            if r.status_code == 404:
+                return out
         if r.status_code >= 300:
             sys.exit(f"HTTP {r.status_code} {r.text[:300]}")
         d = r.json()
