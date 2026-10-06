@@ -153,6 +153,26 @@ def cmd_narrate(a, rest):
     return 0
 
 
+def cmd_voice(a, rest):
+    import voice
+    if a.devices:
+        voice.show_devices(); return 0
+    if not a.video:
+        sys.exit("give the video to narrate")
+    if not a.out:
+        sys.exit("-o is required")
+    if a.script:
+        text = pathlib.Path(a.script).expanduser().read_text()
+    elif a.text:
+        text = a.text
+    else:
+        sys.exit("give --script <file> or --text \"...\"")
+    text = " ".join(l for l in text.splitlines() if not l.startswith("#"))
+    voice.run(pathlib.Path(a.video).expanduser(), text,
+              pathlib.Path(a.out).expanduser(), a.device, a.game, a.wpm, a.keep)
+    return 0
+
+
 def cmd_script(a, rest):
     import narrate
     text = pathlib.Path(a.file).expanduser().read_text() if a.file else sys.stdin.read()
@@ -221,6 +241,18 @@ def main():
     p.add_argument("--private", action="store_true", help="release privately, to check before promoting")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(fn=cmd_shelf)
+
+    p = sub.add_parser("voice", help="read a script over a cut: counts you in, records, mixes")
+    p.add_argument("video", nargs="?")
+    p.add_argument("-o", "--out", default="")
+    p.add_argument("--script", default="", help="a text file to read")
+    p.add_argument("--text", default="", help="the words, inline")
+    p.add_argument("--device", type=int, default=None, help="microphone index")
+    p.add_argument("--devices", action="store_true", help="list microphones and stop")
+    p.add_argument("--game", type=float, default=0.35, help="game level before ducking")
+    p.add_argument("--wpm", type=int, default=150)
+    p.add_argument("--keep", default="", help="also keep the raw take at this path")
+    p.set_defaults(fn=cmd_voice)
 
     p = sub.add_parser("narrate", help="put your voice over a cut and duck the game under it")
     p.add_argument("video")
