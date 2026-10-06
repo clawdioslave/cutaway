@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Cutaway — turn a night of recordings into a vertical video, then put it out.
+
+  cutaway setup                      answer six questions, once
+  cutaway doctor                     check that everything it needs is present
+  cutaway pick                       rank your recent recordings
+  cutaway build --night 2026-10-05 -o ch11.mp4
+  cutaway upload ch11.mp4 --title "..." --desc "..."
+  cutaway post --text "..." --video ch11.mp4
+
+Run any command with -h for its own options.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import pathlib
+import subprocess
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "lib"))
+
+import config  # noqa: E402
+
+
+def cmd_setup(a, rest):
+    if a.what == "x":
+        return subprocess.call([str(HERE / "setup-x.sh")])
+    if a.what == "youtube":
+        import youtube
+        return youtube.setup()
+
+    cfg = config.load()
+    print("Cutaway setup. Press Enter to keep what is in brackets.\n")
+    ask = [
+        ("clips_dir", "Where does your recorder save clips?"),
+        ("night_glob", "How is one night's worth named? ({date} becomes 2026-10-05)"),
+        ("out_dir", "Where should finished verticals go?"),
+        ("tag", "Small credit in the bottom corner (blank for none)"),
+        ("crop", "Crop of the recording to show as 'x,y,w,h' (blank = whole frame)"),
+        ("cam", "Crop of your webcam box as 'x,y,w,h' (blank = leave it out)"),
+    ]
+    for key, question in ask:
+        cur = cfg.get(key, "")
+        got = input(f"{question}\n  [{cur}] ").strip()
+        if got:
+            cfg[key] = got
+    where = config.save(cfg)
+    print(f"\nsaved → {where}")
+    print("Next:  cutaway setup x       (to post to X)")
+    print("       cutaway setup youtube (to upload to YouTube)")
+    print("       cutaway pick          (to see what you have)")
+    return 0
+
+
+def cmd_doctor(a, rest):
+    ok = True
+
+    def line(name, good, note="", optional=False):
+        nonlocal ok
+        if not optional:
+            ok = ok and good
+        mark = "✓" if good else ("·" if optional else "✗")
+        print(f"  {mark}  {name}{('  — ' + note) if note else ''}")
+
+    print("Cutaway:")
+    for b in ("ffmpeg", "ffprobe"):
+        line(b, subprocess.run(["which", b], capture_output=True).returncode == 0,
+             "" if subprocess.run(["which", b], capture_output=True).returncode == 0
+             else "brew install ffmpeg")
+    try:
+        import PIL  # noqa
+        line("pillow", True)
+    except ImportError:
+        line("pillow", False, "python3 -m pip install --user pillow")
+    try:
+        import requests  # noqa
+        line("requests", True)
+    except ImportError:
+        line("requests", False, "python3 -m pip install --user requests")
+    try:
+        import requests_oauthlib  # noqa
+        line("requests-oauthlib", True)
+    except ImportError:
+        line("requests-oauthlib", False, "python3 -m pip install --user requests-oauthlib")
+
+    cfg = config.load()
+    line("config", config.CONFIG.exists(), "" if config.CONFIG.exists() else "cutaway setup")
+    d = pathlib.Path(cfg["clips_dir"]).expanduser()
+    line(f"clips_dir ({d})", d.is_dir(), "" if d.is_dir() else "does not exist")
+    if d.is_dir():
+        n = len(list(d.glob(cfg["clip_glob"])))
+        line(f"{n} recording(s) matching {cfg['clip_glob']}", n > 0)
+    line("X keys", (config.DIR / "x.json").exists(), "" if (config.DIR / "x.json").exists()
+         else "optional — cutaway setup x", optional=True)
+    line("YouTube keys", (config.DIR / "youtube.json").exists(),
+         "" if (config.DIR / "youtube.json").exists() else "optional — cutaway setup youtube",
+         optional=True)
+    print("\nready." if ok else "\nfix the ✗ lines above.")
+    return 0 if ok else 1
+
+
+def cmd_pick(a, rest):
+    import cut
+    cut.need("ffmpeg"); cut.need("ffprobe")
+    cut.pick(config.load(), a.folder, a.scan, a.top)
+    return 0
+
+
+def cmd_build(a, rest):
+    import cut
+    if not (a.clip or a.night or a.stills):
+        sys.exit("give --night YYYY-MM-DD, a recording to cut, or --stills '<glob>'")
+    cut.build(config.load(), a)
+    return 0
+
+
+def cmd_post(a, rest):
+    return subprocess.call([sys.executable, str(HERE / "lib" / "x.py")] + rest)
+
+
+def cmd_upload(a, rest):
+    import youtube
+    if a.check:
+        youtube.check(); return 0
+    if not a.file:
+        sys.exit("give the file to upload")
+    if not a.title:
+        sys.exit("--title is required")
+    youtube.upload(pathlib.Path(a.file).expanduser(), a.title, a.desc,
+                   [t.strip() for t in a.tags.split(",") if t.strip()], a.private)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="cutaway", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("setup", help="write the config, or connect X or YouTube")
+    p.add_argument("what", nargs="?", choices=["x", "youtube"])
+    p.set_defaults(fn=cmd_setup)
+
+    p = sub.add_parser("doctor", help="check that everything it needs is present")
+    p.set_defaults(fn=cmd_doctor)
+
+    p = sub.add_parser("pick", help="rank your recent recordings")
+    p.add_argument("folder", nargs="?", help="a folder to scan instead of clips_dir")
+    p.add_argument("--scan", type=int, default=40, help="how many recent files to examine")
+    p.add_argument("--top", type=int, default=12)
+    p.set_defaults(fn=cmd_pick)
+
+    p = sub.add_parser("build", help="cut a vertical out of your recordings")
+    p.add_argument("clip", nargs="?", help="one recording (with --cuts, or on its own)")
+    p.add_argument("-o", "--out", required=True, help="where to write it")
+    p.add_argument("--night", default="", help="YYYY-MM-DD: use every recording from that date")
+    p.add_argument("--cuts", action="store_true", help="assemble the best moments of the given recording")
+    p.add_argument("--cut-len", type=float, default=3.2, help="seconds per cut (default 3.2)")
+    p.add_argument("--seconds", type=float, default=28.0, help="total length (default 28)")
+    p.add_argument("--start", type=float, default=0.0)
+    p.add_argument("--auto", action="store_true", help="use the busiest single stretch instead of cutting")
+    p.add_argument("--stills", default="", help="glob of pictures to pan over when there is no recording")
+    p.add_argument("--hook", default="", help="big line across the top")
+    p.add_argument("--sub", default="", help="smaller second line")
+    p.add_argument("--tag", default=None, help="override the corner credit for this one")
+    p.add_argument("--story", default="", help="timed beats: 'line | line | 12-18:line | .'")
+    p.add_argument("--story-y", type=float, default=0.155, help="where the beats sit, 0-1")
+    p.add_argument("--crop", default="", help="x,y,w,h of the area to show")
+    p.add_argument("--cam", default="", help="x,y,w,h of the webcam box")
+    p.add_argument("--mute", action="store_true")
+    p.set_defaults(fn=cmd_build)
+
+    p = sub.add_parser("upload", help="send a finished vertical to YouTube",
+                       epilog="anything after -- is passed through untouched")
+    p.add_argument("file", nargs="?")
+    p.add_argument("--title", default="")
+    p.add_argument("--desc", default="")
+    p.add_argument("--tags", default="")
+    p.add_argument("--private", action="store_true", help="upload private instead of public")
+    p.add_argument("--check", action="store_true", help="just confirm the connection")
+    p.set_defaults(fn=cmd_upload)
+
+    p = sub.add_parser("post", help="post to X (run `cutaway post -h` for its options)",
+                       add_help=False)
+    p.set_defaults(fn=cmd_post)
+
+    a, rest = ap.parse_known_args()
+    if not a.cmd:
+        ap.print_help(); return 0
+    if a.cmd != "post" and rest:
+        ap.error(f"unrecognised arguments: {' '.join(rest)}")
+    return a.fn(a, rest) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
